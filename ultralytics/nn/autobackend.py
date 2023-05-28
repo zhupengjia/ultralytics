@@ -384,13 +384,14 @@ class AutoBackend(nn.Module):
                         scale, zero_point = output['quantization']
                         x = (x.astype(np.float32) - zero_point) * scale  # re-scale
                     if x.ndim != 2:  # if task is not classification
+                        # Thanks motokimura for the TFLite export fix, code modified from: https://github.com/motokimura/ultralytics
                         # Unnormalize xywh with input image size
                         # xywh are normalized in TFLite/EdgeTPU to mitigate quantization error of integer models
                         # See this PR for details: https://github.com/ultralytics/ultralytics/pull/1695
-                        x[:, 0] *= w
-                        x[:, 1] *= h
-                        x[:, 2] *= w
-                        x[:, 3] *= h
+                        x[:, :4] *= w
+                        if self.task == 'pose':
+                            x [:, np.arange(5, 56, 3)] *= w
+                            x [:, np.arange(6, 56, 3)] *= w
                     y.append(x)
             # TF segment fixes: export is reversed vs ONNX export and protos are transposed
             if len(y) == 2:  # segment with (det, proto) output order reversed

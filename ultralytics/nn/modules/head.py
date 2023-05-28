@@ -60,13 +60,12 @@ class Detect(nn.Module):
         dbox = dist2bbox(self.dfl(box), self.anchors.unsqueeze(0), xywh=True, dim=1) * self.strides
 
         if self.export and self.format in ('tflite', 'edgetpu'):
+            # Thanks motokimura for the TFLite export fix, code modified from: https://github.com/motokimura/ultralytics
             # Normalize xywh with image size to mitigate quantization error of TFLite integer models as done in YOLOv5:
             # https://github.com/ultralytics/yolov5/blob/0c8de3fca4a702f8ff5c435e67f378d1fce70243/models/tf.py#L307-L309
             # See this PR for details: https://github.com/ultralytics/ultralytics/pull/1695
             img_h = shape[2] * self.stride[0]
-            img_w = shape[3] * self.stride[0]
-            img_size = torch.tensor([img_w, img_h, img_w, img_h], device=dbox.device).reshape(1, 4, 1)
-            dbox /= img_size
+            dbox /= img_h
 
         y = torch.cat((dbox, cls.sigmoid()), 1)
         return y if self.export else (y, x)
@@ -123,19 +122,25 @@ class Pose(Detect):
     def forward(self, x):
         """Perform forward pass through YOLO model and return predictions."""
         bs = x[0].shape[0]  # batch size
+        shape = x[0].shape  # BCHW
+
         kpt = torch.cat([self.cv4[i](x[i]).view(bs, self.nk, -1) for i in range(self.nl)], -1)  # (bs, 17*3, h*w)
         x = self.detect(self, x)
+
         if self.training:
             return x, kpt
-        pred_kpt = self.kpts_decode(bs, kpt)
+        pred_kpt = self.kpts_decode(bs, kpt, shape)
+        
         return torch.cat([x, pred_kpt], 1) if self.export else (torch.cat([x[0], pred_kpt], 1), (x[1], kpt))
 
-    def kpts_decode(self, bs, kpts):
+    def kpts_decode(self, bs, kpts, shape):
         """Decodes keypoints."""
         ndim = self.kpt_shape[1]
         if self.export:  # required for TFLite export to avoid 'PLACEHOLDER_FOR_GREATER_OP_CODES' bug
             y = kpts.view(bs, *self.kpt_shape, -1)
             a = (y[:, :, :2] * 2.0 + (self.anchors - 0.5)) * self.strides
+            if self.format in ('tflite', 'edgetpu'):
+                a /= shape[2] * self.stride[0]
             if ndim == 3:
                 a = torch.cat((a, y[:, :, 2:3].sigmoid()), 2)
             return a.view(bs, self.nk, -1)
