@@ -390,8 +390,8 @@ class AutoBackend(nn.Module):
                         # See this PR for details: https://github.com/ultralytics/ultralytics/pull/1695
                         x[:, :4] *= w
                         if self.task == 'pose':
-                            x [:, np.arange(5, 56, 3)] *= w
-                            x [:, np.arange(6, 56, 3)] *= w
+                            x[:, np.arange(5, 56, 3)] *= w
+                            x[:, np.arange(6, 56, 3)] *= w
                     y.append(x)
             # TF segment fixes: export is reversed vs ONNX export and protos are transposed
             if len(y) == 2:  # segment with (det, proto) output order reversed

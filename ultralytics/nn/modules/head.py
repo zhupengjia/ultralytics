@@ -57,6 +57,7 @@ class Detect(nn.Module):
             cls = x_cat[:, self.reg_max * 4:]
         else:
             box, cls = x_cat.split((self.reg_max * 4, self.nc), 1)
+
         dbox = dist2bbox(self.dfl(box), self.anchors.unsqueeze(0), xywh=True, dim=1) * self.strides
 
         if self.export and self.format in ('tflite', 'edgetpu'):
@@ -124,14 +125,31 @@ class Pose(Detect):
         bs = x[0].shape[0]  # batch size
         shape = x[0].shape  # BCHW
 
-        kpt = torch.cat([self.cv4[i](x[i]).view(bs, self.nk, -1) for i in range(self.nl)], -1)  # (bs, 17*3, h*w)
-        x = self.detect(self, x)
+        for i in range(self.nl):
+            x[i] = torch.cat((self.cv2[i](x[i]), self.cv3[i](x[i]), self.cv4[i](x[i])), 1)
 
         if self.training:
-            return x, kpt
+            return x
+        elif self.dynamic or self.shape != shape:
+            self.anchors, self.strides = (x.transpose(0, 1) for x in make_anchors(x, self.stride, 0.5))
+            self.shape = shape
+
+        x_cat = torch.cat([xi.view(shape[0], self.no + self.nk, -1) for xi in x], 2)
+        if self.export and self.format in ('saved_model', 'pb', 'tflite', 'edgetpu', 'tfjs'):  # avoid TF FlexSplitV ops
+            box = x_cat[:, :self.reg_max * 4]
+            cls = x_cat[:, self.reg_max * 4: self.no]
+            kpt = x_cat[:, self.no:]
+        else:
+            box, cls, kpt = x_cat.split((self.reg_max * 4, self.nc, self.nk), 1)
+
+        dbox = dist2bbox(self.dfl(box), self.anchors.unsqueeze(0), xywh=True, dim=1) * self.strides
+
+        if self.export and self.format in ('tflite', 'edgetpu'):
+            img_h = shape[2] * self.stride[0]
+            dbox /= img_h
         pred_kpt = self.kpts_decode(bs, kpt, shape)
-        
-        return torch.cat([x, pred_kpt], 1) if self.export else (torch.cat([x[0], pred_kpt], 1), (x[1], kpt))
+        y = torch.cat([dbox, cls.sigmoid(), pred_kpt], 1)
+        return y if self.export else (y, x)
 
     def kpts_decode(self, bs, kpts, shape):
         """Decodes keypoints."""
